@@ -12,8 +12,11 @@
 
 ## 🚀 線上展示 (Live Demo)
 
-- **公開發佈網址 (GitHub Pages)**: [https://barry6007-ai.github.io/lotus-bf/](https://barry6007-ai.github.io/lotus-bf/)
-- **課程後端 REST API**: `http://hpc.psy.ntu.edu.tw:5000`
+- **公開發佈網址 (Render Full-Stack - 推薦首選，免設定秒開)**:  
+  👉 **[https://lotus-bf.onrender.com/lotus-bf/](https://lotus-bf.onrender.com/lotus-bf/)**
+- **靜態展示站 (GitHub Pages)**:  
+  👉 [https://barry6007-ai.github.io/lotus-bf/](https://barry6007-ai.github.io/lotus-bf/)
+- **課程官方 HPC 伺服器**: `http://hpc.psy.ntu.edu.tw:5000`
 
 > 💡 **瀏覽器 Mixed Content 存取提示**：
 > 由於 GitHub Pages 強制使用 HTTPS，而校園課程伺服器為 HTTP 協定，若瀏覽器安全機制阻擋跨協議連線，請點擊網址列左側圖示（或鎖頭）將「不安全內容 (Insecure content)」改為「允許」並重新整理即可；亦可透過右上角「⚙️ API 設定」切換端點。
