@@ -4,9 +4,12 @@ from sqlalchemy import text
 import re
 import urllib.parse
 from typing import List, Tuple, Dict, Any, Optional
-from flask_cors import CORS
+try:
+    from flask_cors import CORS
+except ImportError:
+    CORS = None
 
-from flask import Blueprint, Flask, after_this_request, jsonify, request, send_file
+from flask import Blueprint, Flask, after_this_request, jsonify, request, send_file, send_from_directory, redirect
 from sqlalchemy import create_engine, text
 
 # ------------ DB engine -------------
@@ -806,7 +809,29 @@ def _collect_coords_for_mixed(conn, query_string: str, r: float):
 
 def create_app():
     app = Flask(__name__)
-    CORS(app, resources={r"/*": {"origins": "*"}})  # 開發用：全開放
+    if CORS:
+        CORS(app, resources={r"/*": {"origins": "*"}})
+    else:
+        @app.after_request
+        def after_request(response):
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+            return response
+
+    dist_dir = os.path.join(os.path.dirname(__file__), "dist")
+
+    @app.route("/lotus-bf/", defaults={"path": ""})
+    @app.route("/lotus-bf/<path:path>")
+    def serve_frontend(path):
+        if path and os.path.exists(os.path.join(dist_dir, path)):
+            return send_from_directory(dist_dir, path)
+        return send_from_directory(dist_dir, "index.html")
+
+    @app.route("/")
+    def root_redirect():
+        return redirect("/lotus-bf/")
+
     app.register_blueprint(bp)
     return app
 
@@ -925,3 +950,9 @@ def _build_full_tsquery(expr:str)->str:
             else: break
         return left
     return parse_or()
+
+app = create_app()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
