@@ -828,6 +828,16 @@ def create_app():
             return send_from_directory(dist_dir, path)
         return send_from_directory(dist_dir, "index.html")
 
+    @app.route("/assets/<path:path>")
+    def serve_assets(path):
+        assets_dir = os.path.join(dist_dir, "assets")
+        return send_from_directory(assets_dir, path)
+
+    @app.route("/static/<path:path>")
+    def serve_static(path):
+        static_dir = os.path.join(dist_dir, "static")
+        return send_from_directory(static_dir, path)
+
     @app.route("/")
     def root_redirect():
         return redirect("/lotus-bf/")

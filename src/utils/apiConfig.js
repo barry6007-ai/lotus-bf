@@ -17,7 +17,12 @@ export function getApiBaseUrl () {
     return ''
   }
 
-  // In production (e.g. GitHub Pages), default to course backend
+  // If running on Render or full-stack host where frontend and backend share domain
+  if (typeof window !== 'undefined' && (window.location.hostname.includes('render.com') || window.location.port === '10000' || window.location.port === '5000')) {
+    return ''
+  }
+
+  // On GitHub Pages or standalone static hosting, default to course backend
   return DEFAULT_REMOTE_API
 }
 

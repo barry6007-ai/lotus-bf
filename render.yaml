@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: lotus-bf
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app -c gunicorn.conf.py
+    envVars:
+      - key: PORT
+        value: 10000

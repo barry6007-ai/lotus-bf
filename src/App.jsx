@@ -24,7 +24,8 @@ export default function App () {
     try {
       if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
         const cur = getApiBaseUrl()
-        return (cur && cur.startsWith('http:')) || (!cur && DEFAULT_REMOTE_API.startsWith('http:'))
+        // Mixed content only occurs when an HTTPS page explicitly connects to an HTTP external domain
+        return Boolean(cur && cur.startsWith('http://'))
       }
     } catch {}
     return false
