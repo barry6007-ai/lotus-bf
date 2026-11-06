@@ -2,7 +2,7 @@
 // Centralized API configuration for LoTUS-BF
 
 const STORAGE_KEY = 'lotus_api_base'
-export const DEFAULT_REMOTE_API = 'http://hpc.psy.ntu.edu.tw:5000'
+export const DEFAULT_REMOTE_API = 'https://lotus-bf.onrender.com'
 
 export function getApiBaseUrl () {
   try {
