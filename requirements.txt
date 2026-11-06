@@ -1,0 +1,5 @@
+Flask
+Flask-Cors
+Gunicorn
+SQLAlchemy
+psycopg2-binary
