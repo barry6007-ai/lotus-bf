@@ -353,8 +353,31 @@ export function NiiViewer({ query, onAddCoord, targetCoord }) {
           setDims(bg.dims)
           const [nx, ny, nz] = bg.dims
           const mx = Math.floor(nx / 2), my = Math.floor(ny / 2), mz = Math.floor(nz / 2)
-          setIx(mx); setIy(my); setIz(mz)
-          setCx('0'); setCy('0'); setCz('0')
+          
+          let initX = 0, initY = 0, initZ = 0
+          let hasInit = false
+          if (targetCoord && typeof targetCoord.x === 'number') {
+            initX = targetCoord.x; initY = targetCoord.y; initZ = targetCoord.z
+            hasInit = true
+          } else if (query) {
+            const m = query.match(/\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/)
+            if (m) {
+              initX = parseFloat(m[1]); initY = parseFloat(m[2]); initZ = parseFloat(m[3])
+              hasInit = true
+            }
+          }
+
+          if (hasInit) {
+            setIx(coord2idx(initX, nx, 'x'))
+            setIy(coord2idx(initY, ny, 'y'))
+            setIz(coord2idx(initZ, nz, 'z'))
+            setCx(String(Math.round(initX)))
+            setCy(String(Math.round(initY)))
+            setCz(String(Math.round(initZ)))
+          } else {
+            setIx(mx); setIy(my); setIz(mz)
+            setCx('0'); setCy('0'); setCz('0')
+          }
         } catch (e) {
           if (!alive) return
           setErrBG(e?.message || String(e))

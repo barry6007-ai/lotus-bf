@@ -39,7 +39,13 @@ export function Locations ({ query, onSelectCoord }) {
         const data = await res.json().catch(()=>({}))
         if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`)
         if (!alive) return
-        setRows(Array.isArray(data?.results) ? data.results : [])
+        const list = Array.isArray(data?.results) ? data.results : []
+        setRows(list)
+        if (list.length > 0 && !/\[\s*-?\d+/.test(query)) {
+          const first = { x: Number(list[0].x), y: Number(list[0].y), z: Number(list[0].z) }
+          setActiveCoord(first)
+          onSelectCoord?.(first)
+        }
       } catch (e) {
         if (!alive) return
         setErr(e?.message || String(e))

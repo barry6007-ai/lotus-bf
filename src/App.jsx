@@ -103,6 +103,20 @@ export default function App () {
   const [activeTerm, setActiveTerm] = useState('')
   const [selectedCoord, setSelectedCoord] = useState(null)
 
+  // Sync selectedCoord with query whenever query contains coordinates [x, y, z]
+  useEffect(() => {
+    if (!query) return
+    const m = query.match(/\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)(?:\s*~\s*\d+\.?\d*)?\s*\]/)
+    if (m) {
+      const x = parseFloat(m[1])
+      const y = parseFloat(m[2])
+      const z = parseFloat(m[3])
+      if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+        setSelectedCoord({ x, y, z })
+      }
+    }
+  }, [query])
+
   // Derive effective term for RelatedTerms
   const effectiveTerm = useMemo(() => {
     if (activeTerm) return activeTerm
