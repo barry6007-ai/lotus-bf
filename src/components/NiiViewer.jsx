@@ -281,6 +281,28 @@ export function NiiViewer({ query, onAddCoord, targetCoord }) {
     setCz(String(Math.round(targetCoord.z)))
   }, [targetCoord, dims])
 
+  // Auto-jump to coordinate when query contains [x, y, z] (e.g. [-2, 50, -6] AND reward)
+  useEffect(() => {
+    if (!query) return
+    const m = query.match(/\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)(?:\s*~\s*\d+\.?\d*)?\s*\]/)
+    if (m) {
+      const x = parseFloat(m[1])
+      const y = parseFloat(m[2])
+      const z = parseFloat(m[3])
+      if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+        const [nx, ny, nz] = dims
+        if (nx && ny && nz) {
+          setIx(coord2idx(x, nx, 'x'))
+          setIy(coord2idx(y, ny, 'y'))
+          setIz(coord2idx(z, nz, 'z'))
+          setCx(String(Math.round(x)))
+          setCy(String(Math.round(y)))
+          setCz(String(Math.round(z)))
+        }
+      }
+    }
+  }, [query, dims])
+
   // Find top 3 peak activation clusters
   const peaks = useMemo(() => {
     const map = mapRef.current

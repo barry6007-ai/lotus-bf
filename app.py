@@ -1,6 +1,6 @@
 # app.py
 # LoTUS-BF: Unified Full-Stack Service for Render & Local Deployment
-# Ultra-fast, in-memory accelerated SQLite engine with memory-mapped I/O and response caching
+# Ultra-fast, mathematically correct boolean search engine with SQLite mmap acceleration
 
 import os
 import re
@@ -56,11 +56,62 @@ def get_db():
     conn.execute("PRAGMA mmap_size = 300000000")
     return conn
 
-def parse_terms(q):
-    clean = re.sub(r'\[[^\]]+\]', ' ', q)
-    words = re.findall(r'[a-zA-Z0-9_\-]+', clean)
-    keywords = [w.lower() for w in words if w.upper() not in ('AND', 'OR', 'NOT')]
-    return keywords
+def eval_query_sids(cursor, query_str, default_r=6.0):
+    """
+    Mathematically precise Boolean expression evaluator:
+    Supports AND, OR, NOT, coordinates [x, y, z ~ r], and multi-word terms.
+    """
+    tokens = re.findall(r'\[[^\]]+\]|\"[^\"]+\"|\'[^\']+\'|\bAND\b|\bOR\b|\bNOT\b|[a-zA-Z0-9_\-]+', query_str)
+    if not tokens:
+        return set()
+
+    current_set = None
+    op = 'AND'
+    negate_next = False
+
+    for tok in tokens:
+        upper = tok.upper()
+        if upper == 'AND':
+            op = 'AND'
+        elif upper == 'OR':
+            op = 'OR'
+        elif upper == 'NOT':
+            negate_next = True
+        elif tok.startswith('['):
+            m = re.search(r'\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)(?:\s*~\s*(\d+\.?\d*))?\s*\]', tok)
+            if m:
+                x, y, z = float(m.group(1)), float(m.group(2)), float(m.group(3))
+                r = float(m.group(4)) if m.group(4) else default_r
+                r2 = r * r
+                cursor.execute("""
+                    SELECT DISTINCT study_id FROM coordinates
+                    WHERE x BETWEEN ? AND ? AND y BETWEEN ? AND ? AND z BETWEEN ? AND ?
+                      AND ((x - ?)*(x - ?) + (y - ?)*(y - ?) + (z - ?)*(z - ?)) <= ?
+                """, (x - r, x + r, y - r, y + r, z - r, z + r, x, x, y, y, z, z, r2))
+                sids = set(row[0] for row in cursor.fetchall())
+            else:
+                sids = set()
+
+            if negate_next:
+                if current_set is not None: current_set = current_set - sids
+                negate_next = False
+            else:
+                if current_set is None: current_set = sids
+                elif op == 'AND': current_set = current_set.intersection(sids)
+                elif op == 'OR': current_set = current_set.union(sids)
+        else:
+            term = tok.strip('\"\'').lower()
+            cursor.execute("SELECT study_id FROM study_terms WHERE term = ?", (term,))
+            sids = set(row[0] for row in cursor.fetchall())
+            if negate_next:
+                if current_set is not None: current_set = current_set - sids
+                negate_next = False
+            else:
+                if current_set is None: current_set = sids
+                elif op == 'AND': current_set = current_set.intersection(sids)
+                elif op == 'OR': current_set = current_set.union(sids)
+
+    return current_set if current_set is not None else set()
 
 bp = Blueprint("lotus_api", __name__)
 
@@ -143,12 +194,10 @@ def handle_studies(query_string):
 
     try:
         c = conn.cursor()
-        loc_match = re.search(r'\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*\]', query_str)
-        terms = parse_terms(query_str)
         
-        # Fast-path: single term without boolean or location (90% of user queries)
-        if len(terms) == 1 and not loc_match and "NOT" not in query_str.upper():
-            single_term = terms[0]
+        # Check single bare word without operators or coords
+        if re.match(r'^[a-zA-Z0-9_\-]+$', query_str):
+            single_term = query_str.lower()
             limit_clause = ""
             params = [single_term]
             if limit is not None:
@@ -165,11 +214,9 @@ def handle_studies(query_string):
             """, params)
             rows = [dict(r) for r in c.fetchall()]
             
-            total_cnt = len(rows) if limit is None else None
-            if total_cnt is None:
-                c.execute("SELECT COUNT(DISTINCT study_id) FROM study_terms WHERE term = ?", (single_term,))
-                cnt_row = c.fetchone()
-                total_cnt = cnt_row[0] if cnt_row else len(rows)
+            c.execute("SELECT COUNT(DISTINCT study_id) FROM study_terms WHERE term = ?", (single_term,))
+            cnt_row = c.fetchone()
+            total_cnt = cnt_row[0] if cnt_row else len(rows)
                 
             conn.close()
             payload = {
@@ -181,40 +228,14 @@ def handle_studies(query_string):
             STUDIES_CACHE[cache_key] = payload
             return jsonify(payload), 200
 
-        # General multi-term / coordinate path
-        study_id_sets = []
-        if terms:
-            for t in terms:
-                c.execute("SELECT study_id FROM study_terms WHERE term = ?", (t,))
-                sids = set(r[0] for r in c.fetchall())
-                study_id_sets.append(sids)
-
-        if loc_match:
-            x, y, z = float(loc_match.group(1)), float(loc_match.group(2)), float(loc_match.group(3))
-            r2 = r_val * r_val
-            c.execute("""
-                SELECT DISTINCT study_id FROM coordinates
-                WHERE x BETWEEN ? AND ? AND y BETWEEN ? AND ? AND z BETWEEN ? AND ?
-                  AND ((x - ?)*(x - ?) + (y - ?)*(y - ?) + (z - ?)*(z - ?)) <= ?
-            """, (x - r_val, x + r_val, y - r_val, y + r_val, z - r_val, z + r_val, x, x, y, y, z, z, r2))
-            sids = set(r[0] for r in c.fetchall())
-            study_id_sets.append(sids)
-
-        if not study_id_sets:
-            conn.close()
-            return jsonify({"results": [], "count": 0, "total": 0, "applied": {"terms": bool(terms), "locations": bool(loc_match), "r": r_val if loc_match else None}}), 200
-
-        if "OR" in query_str.upper():
-            final_sids = set.union(*study_id_sets)
-        elif "AND" in query_str.upper() or len(terms) > 1:
-            final_sids = set.intersection(*study_id_sets)
-        else:
-            final_sids = study_id_sets[0]
-
+        # General boolean & coordinate query
+        final_sids = eval_query_sids(c, query_str, default_r=r_val)
         total_cnt = len(final_sids)
         if total_cnt == 0:
             conn.close()
-            return jsonify({"results": [], "count": 0, "total": 0, "applied": {"terms": bool(terms), "locations": bool(loc_match), "r": r_val if loc_match else None}}), 200
+            payload = {"results": [], "count": 0, "total": 0, "applied": {"terms": True, "locations": bool("[" in query_str), "r": r_val}}
+            STUDIES_CACHE[cache_key] = payload
+            return jsonify(payload), 200
 
         sid_list = sorted(list(final_sids))
         if offset > 0:
@@ -231,11 +252,13 @@ def handle_studies(query_string):
         """, sid_list)
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
+        
+        has_loc = "[" in query_str
         payload = {
             "results": rows,
             "count": len(rows),
             "total": total_cnt,
-            "applied": {"terms": bool(terms), "locations": bool(loc_match), "r": r_val if loc_match else None}
+            "applied": {"terms": True, "locations": has_loc, "r": r_val if has_loc else None}
         }
         STUDIES_CACHE[cache_key] = payload
         return jsonify(payload), 200
@@ -259,21 +282,23 @@ def handle_locations(query_string):
 
     try:
         c = conn.cursor()
-        terms = parse_terms(query_str)
-        if not terms:
+        final_sids = eval_query_sids(c, query_str)
+        if not final_sids:
             conn.close()
             return jsonify({"results": [], "location_counts": 0, "study_counts": 0}), 200
 
-        t = terms[0]
-        c.execute("""
+        # Sample studies matching the query to retrieve coordinates
+        sid_sample = sorted(list(final_sids))[:500]
+        placeholders = ",".join("?" * len(sid_sample))
+        c.execute(f"""
             SELECT c.study_id, c.x, c.y, c.z
             FROM coordinates c
-            JOIN study_terms st ON c.study_id = st.study_id
-            WHERE st.term = ?
+            WHERE c.study_id IN ({placeholders})
             LIMIT ? OFFSET ?
-        """, (t, limit, offset))
+        """, sid_sample + [limit, offset])
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
+        
         unique_studies = len(set(r["study_id"] for r in rows))
         payload = {
             "results": rows,

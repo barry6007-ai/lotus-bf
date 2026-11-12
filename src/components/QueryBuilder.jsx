@@ -13,7 +13,21 @@ function validateQuery(q) {
   if (!q || !q.trim()) return null;
   const str = q.trim();
 
-  // 1. Parentheses balance
+  // 1. Check illegal symbols like &&, ||, +, &
+  if (/(&&|\|\||[+&|])/.test(str)) {
+    return { type: 'warn', msg: '請使用標準大寫英文布林運算子 (AND, OR, NOT)，而非符號 (&, |, +)' };
+  }
+
+  // 2. Unclosed quotes
+  let quoteCount = 0;
+  for (const ch of str) {
+    if (ch === '"') quoteCount++;
+  }
+  if (quoteCount % 2 !== 0) {
+    return { type: 'warn', msg: '雙引號 " 尚未閉合' };
+  }
+
+  // 3. Parentheses balance
   let openParen = 0;
   for (const ch of str) {
     if (ch === '(') openParen++;
@@ -24,25 +38,25 @@ function validateQuery(q) {
   }
   if (openParen > 0) return { type: 'warn', msg: `有 ${openParen} 個左括號 ( 尚未閉合` };
 
-  // 2. Square brackets balance
+  // 4. Square brackets balance
   let openBracket = 0;
   for (const ch of str) {
     if (ch === '[') openBracket++;
     else if (ch === ']') {
       openBracket--;
-      if (openBracket < 0) return { type: 'error', msg: '座標括號 ] 多於 [' };
+      if (openBracket < 0) return { type: 'error', msg: '座標右括號 ] 多於左括號 [' };
     }
   }
   if (openBracket > 0) return { type: 'warn', msg: '座標括號 [ 尚未閉合' };
 
-  // 3. Inspect coordinate syntax inside [...]
+  // 5. Inspect coordinate syntax inside [...]
   const coordMatches = str.match(/\[[^\]]*\]/g);
   if (coordMatches) {
     const validCoordRegex = /^[-+]?\d*\.?\d+\s*,\s*[-+]?\d*\.?\d+\s*,\s*[-+]?\d*\.?\d+(?:\s*~\s*\d*\.?\d+)?$/;
     for (const match of coordMatches) {
       const inner = match.slice(1, -1).trim();
       if (!inner) {
-        return { type: 'warn', msg: '座標括號內不可為空，需為 [X, Y, Z]' };
+        return { type: 'warn', msg: '座標括號內不可為空，格式需為 [X, Y, Z]' };
       }
       if (!validCoordRegex.test(inner)) {
         if (/[a-zA-Z]/.test(inner.replace(/~/g, ''))) {
@@ -50,22 +64,55 @@ function validateQuery(q) {
         }
         const parts = inner.split(',').map((p) => p.trim()).filter(Boolean);
         if (parts.length !== 3 && !inner.includes('~')) {
-          return { type: 'warn', msg: `座標需為三維數值 [X, Y, Z]，目前為 "${match}"` };
+          return { type: 'warn', msg: `座標需為三個數值 [X, Y, Z]，目前為 "${match}"` };
         }
         return { type: 'warn', msg: `座標格式錯誤 "${match}"，範例：[-22, -4, 18] 或 [-2, 50, -6 ~ 6]` };
       }
     }
   }
 
-  // 3. Trailing boolean operator
+  // 6. Leading boolean operators
+  if (/^\s*(AND|OR)\b/i.test(str)) {
+    const m = str.match(/^\s*(AND|OR)\b/i);
+    return { type: 'warn', msg: `查詢語句不可由 "${m[1].toUpperCase()}" 開頭` };
+  }
+
+  // 7. Trailing boolean operator
   if (/\b(AND|OR|NOT)\s*$/i.test(str)) {
     const match = str.match(/\b(AND|OR|NOT)\s*$/i);
     return { type: 'warn', msg: `語句末尾為運算子 "${match[1].toUpperCase()}"，請接續詞彙或座標` };
   }
 
-  // 4. Consecutive boolean operators
-  if (/\b(AND|OR)\s+(AND|OR|NOT)\b/i.test(str)) {
-    return { type: 'warn', msg: '請避免連續使用布林運算子' };
+  // 8. Consecutive boolean operators
+  if (/\b(AND|OR)\s+(AND|OR|NOT)\b/i.test(str) || /\bNOT\s+(AND|OR|NOT)\b/i.test(str)) {
+    return { type: 'warn', msg: '請避免連續使用布林運算子 (例如：AND AND 或 OR NOT)' };
+  }
+
+  // 9. Empty parentheses
+  if (/\(\s*\)/.test(str)) {
+    return { type: 'warn', msg: '括號內不可為空 ()' };
+  }
+
+  // 10. Operator directly following '('
+  if (/\(\s*(AND|OR)\b/i.test(str)) {
+    const m = str.match(/\(\s*(AND|OR)\b/i);
+    return { type: 'warn', msg: `左括號後不可直接接續 "${m[1].toUpperCase()}"` };
+  }
+
+  // 11. Operator directly preceding ')'
+  if (/\b(AND|OR|NOT)\s*\)/i.test(str)) {
+    const m = str.match(/\b(AND|OR|NOT)\s*\)/i);
+    return { type: 'warn', msg: `右括號前不可為運算子 "${m[1].toUpperCase()}"` };
+  }
+
+  // 12. Coordinate immediately glued to word without space or operator
+  if (/\][a-zA-Z0-9_]/.test(str) || /[a-zA-Z0-9_]\[/.test(str)) {
+    return { type: 'warn', msg: '座標括號與詞彙之間請保留空格或布林運算子' };
+  }
+
+  // 13. Adjacent coordinates without operator e.g. `[1,2,3] [4,5,6]`
+  if (/\]\s*\[/.test(str)) {
+    return { type: 'warn', msg: '多個座標之間請以 AND 或 OR 連接' };
   }
 
   return { type: 'valid', msg: '語法格式正確' };
