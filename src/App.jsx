@@ -8,6 +8,7 @@ import { Locations } from './components/Locations'
 import { NiiViewer } from './components/NiiViewer'
 import { useUrlQueryState } from './hooks/useUrlQueryState'
 import { getApiBaseUrl, setApiBaseUrl, DEFAULT_REMOTE_API, apiUrl } from './utils/apiConfig'
+import { normalizeQueryForApi } from './utils/queryUtils'
 import './App.css'
 
 export default function App () {
@@ -103,9 +104,12 @@ export default function App () {
   const [activeTerm, setActiveTerm] = useState('')
   const [selectedCoord, setSelectedCoord] = useState(null)
 
-  // Sync selectedCoord with query whenever query contains coordinates [x, y, z]
+  // Sync selectedCoord with query whenever query contains coordinates [x, y, z] or search term
   useEffect(() => {
-    if (!query) return
+    if (!query) {
+      setSelectedCoord(null)
+      return
+    }
     const m = query.match(/\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)(?:\s*~\s*\d+\.?\d*)?\s*\]/)
     if (m) {
       const x = parseFloat(m[1])
@@ -113,7 +117,26 @@ export default function App () {
       const z = parseFloat(m[3])
       if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
         setSelectedCoord({ x, y, z })
+        return
       }
+    }
+
+    // Auto-fetch the primary activation coordinate for term searches (e.g. 'ability', 'reward')
+    let alive = true
+    const apiQuery = normalizeQueryForApi(query)
+    fetch(apiUrl(`/query/${encodeURIComponent(apiQuery)}/locations?limit=1`))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!alive || !data?.results?.length) return
+        const first = data.results[0]
+        if (first && typeof first.x === 'number') {
+          setSelectedCoord({ x: first.x, y: first.y, z: first.z })
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      alive = false
     }
   }, [query])
 
