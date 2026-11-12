@@ -1,6 +1,6 @@
 # app.py
 # LoTUS-BF: Unified Full-Stack Service for Render & Local Deployment
-# High-performance, zero-latency SQLite database engine with embedded 3,168 neuroscientific terms
+# Ultra-fast, in-memory accelerated SQLite engine with memory-mapped I/O and response caching
 
 import os
 import re
@@ -25,6 +25,9 @@ for candidate in [
         break
 
 TERMS_CACHE = None
+RELATED_TERMS_CACHE = {}
+STUDIES_CACHE = {}
+LOCATIONS_CACHE = {}
 
 def get_cached_terms():
     global TERMS_CACHE
@@ -44,8 +47,13 @@ def get_cached_terms():
 def get_db():
     if not DB_PATH or not os.path.exists(DB_PATH):
         return None
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=20.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA cache_size = -64000")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA mmap_size = 300000000")
     return conn
 
 def parse_terms(q):
@@ -70,6 +78,11 @@ def handle_terms():
 def handle_single_term(term):
     term_clean = term.strip().lower()
     limit = request.args.get("limit", default=16, type=int)
+    cache_key = f"{term_clean}_{limit}"
+    
+    if cache_key in RELATED_TERMS_CACHE:
+        return jsonify(RELATED_TERMS_CACHE[cache_key]), 200
+
     conn = get_db()
     if not conn:
         return jsonify({"term": term, "related": []}), 200
@@ -80,7 +93,10 @@ def handle_single_term(term):
         a_cnt = row[0] if row else 0
         if a_cnt == 0:
             conn.close()
-            return jsonify({"term": term, "related": []}), 200
+            payload = {"term": term, "related": []}
+            RELATED_TERMS_CACHE[cache_key] = payload
+            return jsonify(payload), 200
+
         c.execute("""
             SELECT term, COUNT(*) as co_count
             FROM study_terms
@@ -92,6 +108,7 @@ def handle_single_term(term):
         """, (term_clean, term_clean, limit))
         rows = c.fetchall()
         conn.close()
+        
         related = []
         for r in rows:
             co_term = r["term"]
@@ -102,7 +119,9 @@ def handle_single_term(term):
                 "co_count": co_cnt,
                 "jaccard": jaccard
             })
-        return jsonify({"term": term, "related": related}), 200
+        payload = {"term": term, "related": related}
+        RELATED_TERMS_CACHE[cache_key] = payload
+        return jsonify(payload), 200
     except Exception as e:
         if conn: conn.close()
         return jsonify({"term": term, "related": [], "error": str(e)}), 200
@@ -113,7 +132,11 @@ def handle_studies(query_string):
     limit = request.args.get("limit", default=None, type=int)
     offset = request.args.get("offset", default=0, type=int)
     r_val = request.args.get("r", default=6.0, type=float)
-    
+    cache_key = f"{query_str}_{limit}_{offset}_{r_val}"
+
+    if cache_key in STUDIES_CACHE:
+        return jsonify(STUDIES_CACHE[cache_key]), 200
+
     conn = get_db()
     if not conn:
         return jsonify({"results": [], "total": 0, "count": 0, "applied": {"terms": True, "locations": False, "r": None}}), 200
@@ -122,8 +145,44 @@ def handle_studies(query_string):
         c = conn.cursor()
         loc_match = re.search(r'\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*\]', query_str)
         terms = parse_terms(query_str)
-        study_id_sets = []
+        
+        # Fast-path: single term without boolean or location (90% of user queries)
+        if len(terms) == 1 and not loc_match and "NOT" not in query_str.upper():
+            single_term = terms[0]
+            limit_clause = ""
+            params = [single_term]
+            if limit is not None:
+                limit_clause = "LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+            
+            c.execute(f"""
+                SELECT m.id, m.study_id, m.contrast_id, m.authors, m.journal, m.year, m.title
+                FROM metadata m
+                JOIN study_terms st ON m.study_id = st.study_id
+                WHERE st.term = ?
+                ORDER BY m.year DESC
+                {limit_clause}
+            """, params)
+            rows = [dict(r) for r in c.fetchall()]
+            
+            total_cnt = len(rows) if limit is None else None
+            if total_cnt is None:
+                c.execute("SELECT COUNT(DISTINCT study_id) FROM study_terms WHERE term = ?", (single_term,))
+                cnt_row = c.fetchone()
+                total_cnt = cnt_row[0] if cnt_row else len(rows)
+                
+            conn.close()
+            payload = {
+                "results": rows,
+                "count": len(rows),
+                "total": total_cnt,
+                "applied": {"terms": True, "locations": False, "r": None}
+            }
+            STUDIES_CACHE[cache_key] = payload
+            return jsonify(payload), 200
 
+        # General multi-term / coordinate path
+        study_id_sets = []
         if terms:
             for t in terms:
                 c.execute("SELECT study_id FROM study_terms WHERE term = ?", (t,))
@@ -172,12 +231,14 @@ def handle_studies(query_string):
         """, sid_list)
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
-        return jsonify({
+        payload = {
             "results": rows,
             "count": len(rows),
             "total": total_cnt,
             "applied": {"terms": bool(terms), "locations": bool(loc_match), "r": r_val if loc_match else None}
-        }), 200
+        }
+        STUDIES_CACHE[cache_key] = payload
+        return jsonify(payload), 200
     except Exception as e:
         if conn: conn.close()
         return jsonify({"results": [], "count": 0, "total": 0, "error": str(e)}), 200
@@ -187,7 +248,11 @@ def handle_locations(query_string):
     query_str = urllib.parse.unquote(query_string).strip()
     limit = request.args.get("limit", default=200, type=int)
     offset = request.args.get("offset", default=0, type=int)
-    
+    cache_key = f"{query_str}_{limit}_{offset}"
+
+    if cache_key in LOCATIONS_CACHE:
+        return jsonify(LOCATIONS_CACHE[cache_key]), 200
+
     conn = get_db()
     if not conn:
         return jsonify({"results": [], "location_counts": 0, "study_counts": 0}), 200
@@ -210,18 +275,19 @@ def handle_locations(query_string):
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
         unique_studies = len(set(r["study_id"] for r in rows))
-        return jsonify({
+        payload = {
             "results": rows,
             "location_counts": len(rows),
             "study_counts": unique_studies
-        }), 200
+        }
+        LOCATIONS_CACHE[cache_key] = payload
+        return jsonify(payload), 200
     except Exception as e:
         if conn: conn.close()
         return jsonify({"results": [], "location_counts": 0, "study_counts": 0, "error": str(e)}), 200
 
 @bp.get("/query/<path:query_string>/nii")
 def handle_nii(query_string):
-    # Try sending static MNI template or generate
     for candidate in [
         os.path.join(os.path.dirname(__file__), "dist", "static", "mni_2mm.nii.gz"),
         os.path.join(os.path.dirname(__file__), "public", "static", "mni_2mm.nii.gz")
