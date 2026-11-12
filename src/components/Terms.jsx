@@ -15,14 +15,30 @@ export function Terms ({ onPickTerm }) {
       setLoading(true)
       setErr('')
       try {
-        const res = await fetch(apiUrl('/terms'), { signal: ac.signal })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        if (!alive) return
-        setTerms(Array.isArray(data?.terms) ? data.terms : [])
+        let res = await fetch(apiUrl('/terms'), { signal: ac.signal })
+        if (!res.ok) {
+          // If remote API returns error, fall back to static local terms.json
+          res = await fetch('terms.json', { signal: ac.signal }).catch(() => null)
+        }
+        if (res && res.ok) {
+          const data = await res.json()
+          if (!alive) return
+          if (Array.isArray(data?.terms) && data.terms.length > 0) {
+            setTerms(data.terms)
+            return
+          }
+        }
+        throw new Error('無法載入詞彙資料')
       } catch (e) {
         if (!alive) return
-        setErr(`Failed to fetch terms: ${e?.message || e}`)
+        // Try one last local fallback
+        fetch('terms.json')
+          .then(r => r.json())
+          .then(d => {
+            if (alive && Array.isArray(d?.terms)) setTerms(d.terms)
+            else setErr(`Failed to fetch terms: ${e?.message || e}`)
+          })
+          .catch(() => setErr(`Failed to fetch terms: ${e?.message || e}`))
       } finally {
         if (alive) setLoading(false)
       }

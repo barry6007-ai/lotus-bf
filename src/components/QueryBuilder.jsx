@@ -87,11 +87,16 @@ export function QueryBuilder({ query, setQuery }) {
   useEffect(() => {
     let alive = true;
     fetch(apiUrl('/terms'))
-      .then((r) => r.json())
+      .then((r) => r.ok ? r.json() : fetch('terms.json').then(r2 => r2.json()))
       .then((d) => {
         if (alive && Array.isArray(d?.terms)) setAllTerms(d.terms);
       })
-      .catch(() => {});
+      .catch(() => {
+        fetch('terms.json')
+          .then((r) => r.json())
+          .then((d) => { if (alive && Array.isArray(d?.terms)) setAllTerms(d.terms); })
+          .catch(() => {});
+      });
     return () => {
       alive = false;
     };
